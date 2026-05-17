@@ -2,7 +2,7 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PATCHES_BIN="$REPO_ROOT/_anvil/bin"
+PATCHES_BIN="$REPO_ROOT/anvil/bin"
 GAME_DIR="$REPO_ROOT/game"
 GDB_DIR="$REPO_ROOT/logs/gdb"
 
@@ -23,6 +23,6 @@ exec gdb \
     -iex "set debuginfod enabled off" \
     -ex "handle SIG34 nostop noprint pass" \
     -ex "handle SIG35 nostop noprint pass" \
-    -ex "source $REPO_ROOT/_anvil/tools/gdb-auto-bt.py" \
+    -ex "source $REPO_ROOT/anvil/tools/gdb-auto-bt.py" \
     -ex "run" \
     --args "$GAME_DIR/sbox" "$@"
