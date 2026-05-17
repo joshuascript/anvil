@@ -17,7 +17,7 @@ def inline(text):
 
 def box(title):
     width = 39
-    pad = " " * max(0, width - len(title) - 4)
+    pad = " " * max(0, width - len(title) - 8)
     top    = f"  {DIM}{'▄' * width}{RESET}"
     mid    = f"  {DIM}█ {RESET}{BLUE}{BOLD}⬡  {title}{RESET}{pad}{DIM} █{RESET}"
     bottom = f"  {DIM}{'▀' * width}{RESET}"
