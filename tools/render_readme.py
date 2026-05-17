@@ -17,7 +17,7 @@ def inline(text):
 
 def box(title):
     width = 39
-    pad = " " * max(0, width - len(title) - 8)
+    pad = " " * max(0, width - len(title) - 7)
     top    = f"  {DIM}{'▄' * width}{RESET}"
     mid    = f"  {DIM}█ {RESET}{BLUE}{BOLD}⬡  {title}{RESET}{pad}{DIM} █{RESET}"
     bottom = f"  {DIM}{'▀' * width}{RESET}"
@@ -31,7 +31,7 @@ def render(path):
         line = line.rstrip()
 
         if re.match(r'^# ', line):
-            out += ["", box(line[2:].strip()), ""]
+            out += ["", box(line[2:].strip())]
 
         elif re.match(r'^### ', line):
             out.append(f"  {YELLOW}{line[4:].strip()}{RESET}")
