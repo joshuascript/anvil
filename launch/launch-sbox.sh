@@ -2,7 +2,7 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PATCHES_BIN="$REPO_ROOT/anvil/bin"
+PATCHES_BIN="$REPO_ROOT/anvil/patch/bin"
 GAME_DIR="$REPO_ROOT/game"
 
 if [ -d "$PATCHES_BIN" ]; then

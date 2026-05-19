@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHIMS="$REPO_ROOT/anvil/shims"
-OUT_DIR="$REPO_ROOT/anvil/bin"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SHIMS="$REPO_ROOT/anvil/patch"
+OUT_DIR="$REPO_ROOT/anvil/patch/bin"
 GAME_BIN="$REPO_ROOT/game/bin/linuxsteamrt64"
 VIDEO_TXT="$REPO_ROOT/game/core/cfg/video.txt"
 

@@ -1,1 +1,2 @@
-*.so
+patch/bin/
+debug/logs/

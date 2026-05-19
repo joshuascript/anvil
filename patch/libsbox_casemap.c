@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -106,6 +107,7 @@ static int    (*real_lstat64) (const char *, struct stat64 *) = NULL;
 static int    (*real_access)  (const char *, int) = NULL;
 
 static __thread int active = 0;  /* re-entrancy guard — prevents recursion from opendir() */
+static pthread_mutex_t map_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── init ───────────────────────────────────────────────────────── */
 
@@ -187,12 +189,14 @@ static const char *resolve(const char *path, char *buf) {
     size_t plen = strlen(path);
     for (size_t i = 0; i <= plen; i++) lo[i] = (char)tolower((unsigned char)path[i]);
 
+    pthread_mutex_lock(&map_lock);
+
     /* 1. Negative cache check. */
-    if (map_has(&neg, lo)) return NULL;
+    if (map_has(&neg, lo)) { pthread_mutex_unlock(&map_lock); return NULL; }
 
     /* 2. Fast path — stat() the path exactly as given. */
     struct stat st;
-    if (stat(path, &st) == 0) return path;
+    if (stat(path, &st) == 0) { pthread_mutex_unlock(&map_lock); return path; }
 
     /* 3. Segment walk from CWD. */
     char rel_copy[PATH_MAX];
@@ -229,10 +233,11 @@ static const char *resolve(const char *path, char *buf) {
         seg = strtok_r(NULL, "/", &save);
     }
 
-    if (ok) return buf;
+    if (ok) { pthread_mutex_unlock(&map_lock); return buf; }
 
     /* Walk failed — confirmed miss. Cache it to avoid re-walking. */
     set_add(&neg, lo);
+    pthread_mutex_unlock(&map_lock);
     return NULL;
 }
 
