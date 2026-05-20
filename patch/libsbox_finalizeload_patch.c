@@ -106,7 +106,7 @@ static void do_patch(void)
 
     for (size_t i = 0; i < limit; i++) {
         if (memcmp(text + i, pattern, sizeof(pattern)) == 0) {
-            jge = text + i + sizeof(pattern);
+            jge = text + i + 6;  /* 0f 8d sits at offset 6 within the pattern */
             break;
         }
     }
