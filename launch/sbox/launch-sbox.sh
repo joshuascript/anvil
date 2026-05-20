@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PATCHES_BIN="$REPO_ROOT/anvil/patch/bin"
 GAME_DIR="$REPO_ROOT/game"
 
@@ -13,4 +13,6 @@ if [ -d "$PATCHES_BIN" ]; then
 fi
 
 export LD_LIBRARY_PATH="$GAME_DIR/bin/linuxsteamrt64:$LD_LIBRARY_PATH"
-exec "$GAME_DIR/sbox-server" "$@"
+export SBOX_TRACE_DIR="${SBOX_TRACE_DIR:-$REPO_ROOT/anvil/debug/logs}"
+mkdir -p "$SBOX_TRACE_DIR"
+exec python3 "$REPO_ROOT/anvil/launch/preload/inotify.py" "$GAME_DIR/sbox" "$@"

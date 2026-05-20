@@ -13,7 +13,8 @@ All paths below are relative to `anvil/`.
 | `debug/logs/` | GDB trace output and CLR nullref logs |
 | `patch/` | LD_PRELOAD runtime patches for `libengine2.so` and other natives |
 | `patch/bin/` | Compiled `.so` patch binaries (auto-loaded by launch scripts) |
-| `launch/` | Launch scripts for sbox and GDB sessions |
+| `launch/sbox/` | Launch scripts for sbox and GDB sessions |
+| `launch/preload/` | Python preload scripts — run before the game to configure system state |
 | `llmcontext/` | Markdown write-ups of past bugs, crashes, and patch rationale |
 
 ---
@@ -71,28 +72,61 @@ that covers two unrelated bugs.
 
 ## Launch Scripts
 
-### `launch/launch-sbox.sh`
+All launch scripts live in `launch/sbox/`. Each one invokes
+`launch/preload/inotify.py` before the game or GDB process so the inotify
+watch limit is raised for the session.
+
+### `launch/sbox/launch-sbox.sh`
 
 Standard launch. Loads all `.so` files from `patch/bin/` via `LD_PRELOAD`, sets
 `SBOX_TRACE_DIR` to `debug/logs/`, and execs `game/sbox`.
 
-### `launch/launch-sbox-gdb.sh`
+### `launch/sbox/launch-sbox-gdb.sh`
 
 Same as above but launches under GDB. Source GDB scripts after attaching.
 
-### `launch/launch-sbox-server.sh`
+### `launch/sbox/launch-sbox-server.sh`
 
-Dedicated server variant.
+Dedicated server variant (`game/sbox-server`).
 
-### `launch/launch-sbox-finalizeload-bt.sh`
+### `launch/sbox/launch-sbox-finalizeload-bt.sh`
 
 Runs sbox under GDB with `gdb-finalizeload-bt.py` and `gdb-auto-bt.py` both
 active. Intentionally excludes `libsbox_finalizeload_patch.so` from `LD_PRELOAD`
 so the assertion `jge` is reachable and the breakpoint fires.
 
-### `launch/launch-sbox-capture-steam-callbacks.sh`
+### `launch/sbox/launch-sbox-capture-steam-callbacks.sh`
 
 Runs with `capture_steam_callback.py` active for Steam IPC reverse-engineering.
+
+### `launch/sbox/launch-sbox-probe-wrapper.sh`
+
+Runs sbox under GDB with `probe_wrapper_layout.py` for ISteamHTMLSurface
+wrapper object layout inspection.
+
+---
+
+## Preload Scripts
+
+Python scripts in `launch/preload/` run before the game process and handle
+system-level setup. All launch scripts invoke them automatically.
+
+### `launch/preload/inotify.py`
+
+Temporarily raises `fs.inotify.max_user_watches` (written to
+`/proc/sys/fs/inotify/max_user_watches`) for the duration of the session,
+then restores the original value on exit.
+
+**Why this is needed:** `libengine2.so` and `libtier0.so` watch game content
+directories via inotify. On Debian the default limit (8192) is exhausted by a
+full sbox session, causing the engine to fall back to polling via `readdir()`.
+That polling loop races with internal hash table lookups on .NET thread pool
+threads, producing a SIGSEGV in `libengine2.so`.
+
+On launch the script prints the current and required values, explains the risk,
+and asks `[y/N]`. Declining skips the change and continues to launch with a
+warning. The original value is always restored on exit via `atexit` and signal
+handlers (`SIGTERM`, `SIGINT`, `SIGHUP`).
 
 ---
 
@@ -164,7 +198,21 @@ command.
 
 ### `patch/libsbox_casemap.c`
 
-Case-mapping shim. See source for details.
+LD_PRELOAD shim that resolves wrong-cased file paths for s&box on Linux.
+The engine was written for Windows (case-insensitive NTFS); on Linux, paths
+like `addons/base/assets` fail when the real path is `addons/base/Assets`.
+
+Intercepts `fstatat`, `openat`, `inotify_add_watch`, `open`, `open64`,
+`fopen`, `fopen64`, `freopen64`, `stat`, `stat64`, `lstat64`, and `access`.
+For paths under the game directory it walks each path segment, scans the
+parent directory once via `opendir`/`readdir`, caches a `lowercase→real`
+mapping, and resolves case-insensitively. A negative cache prevents
+re-walking confirmed misses.
+
+**Overlap note:** `libtier0.so` now exports `FioFindFileInDirCaseInsensitive`
+which covers the same problem for tier0-routed calls. `libengine2.so` does
+**not** use that function — it calls `opendir`/`readdir`/`scandir` directly
+from glibc — so the shim still provides full coverage for engine file IO.
 
 ---
 

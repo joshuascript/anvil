@@ -5,7 +5,7 @@
 # Output shows which field of the wrapper holds the raw ISteamHTMLSurface ptr.
 set -e
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PATCHES_BIN="$REPO_ROOT/anvil/patch/bin"
 GAME_DIR="$REPO_ROOT/game"
 
@@ -18,7 +18,8 @@ fi
 
 export LD_LIBRARY_PATH="$GAME_DIR/bin/linuxsteamrt64:$LD_LIBRARY_PATH"
 
-exec gdb \
+exec python3 "$REPO_ROOT/anvil/launch/preload/inotify.py" \
+    gdb \
     --readnever \
     -iex "set debuginfod enabled off" \
     -iex "set pagination off" \
