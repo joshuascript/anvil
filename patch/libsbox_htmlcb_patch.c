@@ -1,7 +1,7 @@
 /*
  * libsbox_htmlcb_patch.c
  *
- * Patches the ISteamHTMLSurface callback at ELF offset 0x34d160 in
+ * Patches the ISteamHTMLSurface callback at ELF offset 0x34d1a6 in
  * libengine2.so to prevent a crash caused by an ABI mismatch in the
  * callback's second argument (RSI).
  *
@@ -13,13 +13,13 @@
  * On Linux, steamclient.so passes the browser handle integer (e.g. 8) in
  * RSI instead, causing a SIGSEGV when the function dereferences it:
  *
- *   34d171:  test   %rsi,%rsi     ; non-zero — not taken as null
- *   34d184:  je     34d189        ; skipped because RSI == 8, not 0
- *   34d186:  mov    (%rsi),%rsi   ; CRASH — dereferences integer 8 as ptr
+ *   34d191:  test   %rsi,%rsi     ; non-zero — not taken as null
+ *   34d1a4:  je     34d1a9        ; skipped because RSI == 8, not 0
+ *   34d1a6:  mov    (%rsi),%rsi   ; CRASH — dereferences integer 8 as ptr
  *
  * Fix
  * ---
- * Replace the 3-byte MOV at 0x34d186 with XOR RSI,RSI (also 3 bytes):
+ * Replace the 3-byte MOV at 0x34d1a6 with XOR RSI,RSI (also 3 bytes):
  *   48 8b 36  →  48 31 f6
  *
  * This zeroes RSI at that point, which is equivalent to the null branch
@@ -58,7 +58,7 @@
  * Instruction: 48 8b 36  (mov rsi, [rsi])  — 3 bytes
  * Replacement: 48 31 f6  (xor rsi, rsi)    — 3 bytes
  */
-#define CRASH_INSN_OFFSET  0x34d186UL
+#define CRASH_INSN_OFFSET  0x34d1a6UL
 #define PATCH_BYTES        "\x48\x31\xf6"   /* xor rsi, rsi */
 #define PATCH_LEN          3
 

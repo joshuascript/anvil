@@ -86,6 +86,7 @@ else:
             ("--- thread apply all bt ---\n", "thread apply all bt"),
             ("--- info registers ---\n",      "info registers"),
             ("--- x/16i $pc-24 ---\n",        "x/16i $pc-24"),
+            ("--- info proc mappings ---\n",  "info proc mappings"),
         ]
 
         with open(path, "w") as f:

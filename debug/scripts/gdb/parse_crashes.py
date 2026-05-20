@@ -46,6 +46,7 @@ class CrashFile:
     threads: list
     registers: Optional[str]
     disasm: Optional[str]
+    mappings: Optional[str]
 
 # ---------------------------------------------------------------------------
 # Parsing
@@ -88,6 +89,7 @@ def parse_file(path: str) -> Optional[CrashFile]:
     section = None
     reg_lines: list = []
     disasm_lines: list = []
+    mapping_lines: list = []
 
     for raw in lines:
         line = raw.rstrip()
@@ -108,6 +110,9 @@ def parse_file(path: str) -> Optional[CrashFile]:
             continue
         if '--- x/16i $pc-24 ---' in line:
             section = 'disasm'
+            continue
+        if '--- info proc mappings ---' in line:
+            section = 'mappings'
             continue
 
         if section == 'bt':
@@ -133,6 +138,9 @@ def parse_file(path: str) -> Optional[CrashFile]:
         elif section == 'disasm' and line:
             disasm_lines.append(line)
 
+        elif section == 'mappings' and line:
+            mapping_lines.append(line)
+
     if current_thread:
         threads.append(current_thread)
 
@@ -144,6 +152,7 @@ def parse_file(path: str) -> Optional[CrashFile]:
         pc=pc, kind=kind, threads=threads,
         registers='\n'.join(reg_lines) or None,
         disasm='\n'.join(disasm_lines) or None,
+        mappings='\n'.join(mapping_lines) or None,
     )
 
 # ---------------------------------------------------------------------------
@@ -173,6 +182,35 @@ def collect_unique_calls(crash_files: list) -> OrderedDict:
                     }
                 seen[key]['count'] += 1
     return seen
+
+# ---------------------------------------------------------------------------
+# Mappings helpers
+# ---------------------------------------------------------------------------
+
+RE_MAPPING = re.compile(
+    r'^\s*(0x[0-9a-fA-F]+)\s+(0x[0-9a-fA-F]+)\s+0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+\s+\S+\s*(.*?)\s*$'
+)
+
+
+def _parse_mappings(raw: str) -> list:
+    result = []
+    for line in raw.splitlines():
+        m = RE_MAPPING.match(line)
+        if m:
+            result.append((int(m.group(1), 16), int(m.group(2), 16), m.group(3).strip() or None))
+    return result
+
+
+def _lookup_pc(pc_str: str, mappings_raw: str) -> Optional[str]:
+    try:
+        pc = int(pc_str, 16)
+    except ValueError:
+        return None
+    for start, end, name in _parse_mappings(mappings_raw):
+        if start <= pc < end:
+            return name or '[anonymous]'
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Thread grouping helpers
@@ -327,6 +365,11 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
             f"### SIGSEGV #{cf.sigsegv_n} - {cf.timestamp} @ `{cf.pc}` ({cf.kind})"
         )
         out.append("")
+        if cf.mappings:
+            lib = _lookup_pc(cf.pc, cf.mappings)
+            if lib:
+                out.append(f"**PC library:** `{os.path.basename(lib)}`  (`{lib}`)")
+                out.append("")
         if faulting:
             chain_label = fp_to_label.get(_thread_fingerprint(faulting), "unknown")
             out.append(
@@ -374,6 +417,21 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
                 if cf.disasm:
                     out.append(f"### SIGSEGV #{cf.sigsegv_n} - PC - 24")
                     out += ["", "```asm", cf.disasm, "```", ""]
+
+    # Mappings appendix — deduplicated if identical across all files
+    all_mappings = [cf.mappings for cf in crash_files if cf.mappings]
+    if all_mappings:
+        out += ["---", "", "## Appendix - Process Mappings", ""]
+        if len(set(all_mappings)) == 1:
+            out += [
+                "### Address map (same across all crash events)", "",
+                "```", all_mappings[0], "```", "",
+            ]
+        else:
+            for cf in crash_files:
+                if cf.mappings:
+                    out.append(f"### SIGSEGV #{cf.sigsegv_n} - Address map")
+                    out += ["", "```", cf.mappings, "```", ""]
 
     return '\n'.join(out)
 
