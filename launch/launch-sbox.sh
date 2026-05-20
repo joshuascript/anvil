@@ -13,4 +13,6 @@ if [ -d "$PATCHES_BIN" ]; then
 fi
 
 export LD_LIBRARY_PATH="$GAME_DIR/bin/linuxsteamrt64:$LD_LIBRARY_PATH"
+export SBOX_TRACE_DIR="${SBOX_TRACE_DIR:-$REPO_ROOT/anvil/debug/logs}"
+mkdir -p "$SBOX_TRACE_DIR"
 exec "$GAME_DIR/sbox" "$@"

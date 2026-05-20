@@ -19,30 +19,30 @@
  * There is no behavioural difference between the two paths — the assert
  * is pure log/UI noise on the error path.
  *
- * Disassembly (libengine2.so, confirmed 2026-05-20)
- * --------------------------------------------------
- * 3e6f99:  mov  0x6c(%rax),%eax         ; pLoadingResource->ExtRefDepth
- * 3e6f9c:  cmp  %eax, 0x6c(%rbx)        ; this->ExtRefDepth vs dependency
- * 3e6f9f:  jge  0x26f1da                ; assert if this->depth >= dep->depth
- *          ...                          ; (assertion handler, then falls through)
- * 3e6fa5:  mov  0x30(%rbx),%rax         ; normal continuation (same as after assert)
+ * Pattern scan
+ * ------------
+ * Rather than a hardcoded offset, the patch scans the executable PT_LOAD
+ * segment of libengine2.so for the unique sequence:
  *
- * Fix
- * ---
- * NOP the 6-byte jge at offset 0x3e6f9f:
- *   0f 8d 35 82 e8 ff  →  90 90 90 90 90 90
+ *   8b 40 6c        mov  0x6c(%rax),%eax   ; pLoadingResource->ExtRefDepth
+ *   39 43 6c        cmp  %eax,0x6c(%rbx)   ; this->ExtRefDepth
+ *   0f 8d ?? ?? ?? ??  jge  <assert>       ; fires if depth ordering violated
+ *            ...                           ; (assertion handler, falls through)
  *
- * This makes execution always fall through to the normal continuation
- * without ever triggering the assertion.
+ * The jge (6 bytes starting at pattern+6) is replaced with 6 NOPs, making
+ * execution always fall through to the same continuation as the non-assert
+ * path.  The found offset is printed to stderr for reference.
  *
- * Offset history (libengine2.so)
- * ------------------------------
- * Date       | JGE offset  | Expected bytes       | Notes
+ * Offset history (libengine2.so) — for reference only, not used at runtime
+ * -------------------------------------------------------------------------
+ * Date       | JGE offset  | jge bytes            | Notes
  * 2026-05-20 | 0x3e6f9f    | 0f 8d 35 82 e8 ff    | Initial
+ * 2026-05-20 | 0x3e6b1f    | 0f 8d b5 86 e8 ff    | After engine update (-0x480)
  */
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <elf.h>
 #include <link.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -51,22 +51,33 @@
 #include <string.h>
 #include <pthread.h>
 
-#define JGE_OFFSET 0x3e6f9fUL
-
-static const uint8_t expected[6] = { 0x0f, 0x8d, 0x35, 0x82, 0xe8, 0xff };
-static const uint8_t nops[6]     = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+/* mov 0x6c(%rax),%eax ; cmp %eax,0x6c(%rbx) ; jge */
+static const uint8_t pattern[]  = { 0x8b, 0x40, 0x6c, 0x39, 0x43, 0x6c, 0x0f, 0x8d };
+static const uint8_t nops[6]    = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
 
 static pthread_once_t patch_once = PTHREAD_ONCE_INIT;
 
-struct find_result { uintptr_t base; int found; };
+struct find_result {
+    uintptr_t text_start;
+    size_t    text_size;
+    int       found;
+};
 
 static int find_engine2(struct dl_phdr_info *info, size_t size, void *data)
 {
     (void)size;
-    if (info->dlpi_name && strstr(info->dlpi_name, "libengine2.so")) {
-        ((struct find_result *)data)->base  = (uintptr_t)info->dlpi_addr;
-        ((struct find_result *)data)->found = 1;
-        return 1;
+    if (!info->dlpi_name || !strstr(info->dlpi_name, "libengine2.so"))
+        return 0;
+
+    struct find_result *res = data;
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type == PT_LOAD && (ph->p_flags & PF_X)) {
+            res->text_start = (uintptr_t)info->dlpi_addr + ph->p_vaddr;
+            res->text_size  = ph->p_memsz;
+            res->found      = 1;
+            return 1;
+        }
     }
     return 0;
 }
@@ -81,23 +92,35 @@ static void mprotect_page(void *addr, int prot)
 
 static void do_patch(void)
 {
-    struct find_result res = { 0, 0 };
+    struct find_result res = { 0, 0, 0 };
     dl_iterate_phdr(find_engine2, &res);
 
     if (!res.found) {
-        fprintf(stderr, "[finalizeload_patch] libengine2.so not found — patch not installed\n");
+        fprintf(stderr, "[finalizeload_patch] libengine2.so executable segment not found\n");
         return;
     }
 
-    uintptr_t base = res.base;
-    uint8_t *jge = (uint8_t *)(base + JGE_OFFSET);
+    uint8_t *text  = (uint8_t *)res.text_start;
+    size_t   limit = res.text_size - sizeof(pattern) - 6;
+    uint8_t *jge   = NULL;
 
-    if (memcmp(jge, expected, 6) != 0) {
+    for (size_t i = 0; i < limit; i++) {
+        if (memcmp(text + i, pattern, sizeof(pattern)) == 0) {
+            jge = text + i + sizeof(pattern);
+            break;
+        }
+    }
+
+    if (!jge) {
+        fprintf(stderr, "[finalizeload_patch] pattern not found — patch not installed\n");
+        return;
+    }
+
+    /* Sanity check: should be a far jge (0f 8d) */
+    if (jge[0] != 0x0f || jge[1] != 0x8d) {
         fprintf(stderr,
-                "[finalizeload_patch] unexpected bytes at 0x%lx+0x%lx: %02x %02x %02x %02x %02x %02x"
-                " — patch skipped (binary version mismatch?)\n",
-                base, JGE_OFFSET,
-                jge[0], jge[1], jge[2], jge[3], jge[4], jge[5]);
+                "[finalizeload_patch] unexpected opcode at pattern+6: %02x %02x — skipped\n",
+                jge[0], jge[1]);
         return;
     }
 
@@ -106,8 +129,8 @@ static void do_patch(void)
     mprotect_page(jge, PROT_READ | PROT_EXEC);
 
     fprintf(stderr,
-            "[finalizeload_patch] installed — base=0x%lx  jge@0x%lx → 6×NOP\n",
-            base, (uintptr_t)jge);
+            "[finalizeload_patch] installed — jge@0x%lx (offset 0x%lx) → 6×NOP\n",
+            (uintptr_t)jge, (uintptr_t)(jge - res.text_start));
 }
 
 void *dlopen(const char *filename, int flags)
