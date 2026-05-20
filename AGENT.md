@@ -18,6 +18,57 @@ All paths below are relative to `anvil/`.
 
 ---
 
+## LLM Context (`llmcontext/`)
+
+Markdown write-ups of past bugs, crashes, patches, and assertions. **Always
+read relevant files here before investigating a known crash type** — prior
+analysis may already identify the root cause and fix.
+
+### When to update
+
+Update or create a `llmcontext/` file whenever:
+
+- A new root cause is identified (even if not yet fixed)
+- A fix is applied — record what was changed and where
+- A patch offset goes stale and is corrected
+- A previously confirmed fix regresses — add a note with the new session and what was missed
+- An assertion is newly observed — add it to `llmcontext/assertions/`
+
+**Write the Verification section and mark a fix as solved only after the user
+has verbally confirmed the fix worked** (e.g. "that fixed it", "no more
+crashes", "confirmed"). Do not mark a fix confirmed based on a clean GDB session
+alone — always wait for explicit user confirmation.
+
+After applying any fix, always ask the user: "Did that fix it?" (or equivalent)
+before updating llmcontext with a confirmed solution.
+
+### File conventions
+
+| Content | Location |
+|---------|----------|
+| Crash root cause + fix | `llmcontext/<short_name>.md` |
+| Native patch rationale | `llmcontext/libsbox_<name>_patch.md` |
+| Assertion dialogs | `llmcontext/assertions/<assertion_name>.md` |
+
+Each file should cover: **Problem**, **Root Cause**, **Fix** (with code
+snippets), and **Verification** (which GDB session confirmed it).
+
+### One issue per file
+
+Each distinct issue gets its own file. When a fix is found:
+
+- **Check existing files first.** If the issue is a direct extension of a known
+  bug (same root cause, same crash site, missed code path), add it to that
+  file's Fix section.
+- **Create a new file** if the issue has a different root cause, crash site, or
+  subsystem — even if it produces similar symptoms. Name it after the root cause,
+  not the symptom (e.g. `citizen_animation_nan.md`, not `animation_crash2.md`).
+
+When in doubt, create a new file. Splitting is easier than untangling a file
+that covers two unrelated bugs.
+
+---
+
 ## Launch Scripts
 
 ### `launch/launch-sbox.sh`
@@ -32,6 +83,12 @@ Same as above but launches under GDB. Source GDB scripts after attaching.
 ### `launch/launch-sbox-server.sh`
 
 Dedicated server variant.
+
+### `launch/launch-sbox-finalizeload-bt.sh`
+
+Runs sbox under GDB with `gdb-finalizeload-bt.py` and `gdb-auto-bt.py` both
+active. Intentionally excludes `libsbox_finalizeload_patch.so` from `LD_PRELOAD`
+so the assertion `jge` is reachable and the breakpoint fires.
 
 ### `launch/launch-sbox-capture-steam-callbacks.sh`
 
@@ -156,6 +213,29 @@ Output goes to `debug/logs/callbacks_<timestamp>/captures.txt`. Configure
 `MAX_CAPTURES` (default 40) prevents log flooding.
 
 Re-source after the engine starts if the symbol isn't visible at load time.
+
+---
+
+### `debug/scripts/gdb/gdb-finalizeload-bt.py`
+
+Traces every hit of the `FinalizeLoadRequest()` depth-ordering assertion in
+`libengine2.so` without stopping execution. Uses the same dynamic pattern scan
+as `libsbox_finalizeload_patch` to locate the `jge` at runtime, then installs
+a silent breakpoint there.
+
+On each hit records:
+- `pLoadingResource->ExtRefDepth` (`$eax` at the jge)
+- `this->ExtRefDepth` (`*($rbx + 0x6c)`)
+- Whether the assertion would pass or fail
+- Full thread backtrace and registers
+
+Output goes to `debug/logs/finalizeload_<timestamp>/captures.txt`. Cap is
+`MAX_CAPTURES = 40`. Install alongside `gdb-auto-bt.py` to correlate assertion
+hits with any subsequent SIGSEGV crashes.
+
+**Note:** run with `libsbox_finalizeload_patch` **disabled** (remove it from
+`LD_PRELOAD`) so the assertion path is actually reachable; otherwise the jge is
+NOPed out and the breakpoint never fires.
 
 ---
 
