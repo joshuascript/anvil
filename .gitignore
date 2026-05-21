@@ -1,3 +1,4 @@
 patches/bin/
 debug/logs/
 *.so
+__pycache__/
