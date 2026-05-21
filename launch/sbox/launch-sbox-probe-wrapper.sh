@@ -4,21 +4,9 @@
 # dumps the wrapper object fields on each hit, then continues.
 # Output shows which field of the wrapper holds the raw ISteamHTMLSurface ptr.
 set -e
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-PATCHES_BIN="$REPO_ROOT/anvil/patch/bin"
-GAME_DIR="$REPO_ROOT/game"
-
-if [ -d "$PATCHES_BIN" ]; then
-    for so in "$PATCHES_BIN"/*.so; do
-        [ -f "$so" ] && LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$so"
-    done
-    export LD_PRELOAD
-fi
-
-export LD_LIBRARY_PATH="$GAME_DIR/bin/linuxsteamrt64:$LD_LIBRARY_PATH"
-
-exec python3 "$REPO_ROOT/anvil/launch/preload/inotify.py" \
+GDB_SCRIPTS="$REPO_ROOT/anvil/debug/scripts/gdb"
+exec python3 "$REPO_ROOT/anvil/launch/preload/preload.py" \
     gdb \
     --readnever \
     -iex "set debuginfod enabled off" \
@@ -26,6 +14,6 @@ exec python3 "$REPO_ROOT/anvil/launch/preload/inotify.py" \
     -ex "handle SIG34 nostop noprint pass" \
     -ex "handle SIG35 nostop noprint pass" \
     -ex "handle SIGSEGV nostop noprint pass" \
-    -ex "source $REPO_ROOT/anvil/debug/scripts/gdb/probe_wrapper_layout.py" \
+    -ex "source $GDB_SCRIPTS/probe_wrapper_layout.py" \
     -ex "run" \
-    --args "$GAME_DIR/sbox" "$@"
+    --args "$REPO_ROOT/game/sbox" "$@"

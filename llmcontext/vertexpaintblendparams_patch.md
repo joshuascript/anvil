@@ -115,6 +115,6 @@ offsets. Both patches should write to the same table.
 
 ## Files to update when solved
 
-- `anvil/patch/libsbox_lightmapuv_patch.c` — update offsets, add second entry
+- `anvil/patches/libsbox_lightmapuv_patch.c` — update offsets, add second entry
 - `anvil/llmcontext/libsbox_lightmapuv_patch.md` — update offset history table
 - This file — mark resolved, fill in verified offsets

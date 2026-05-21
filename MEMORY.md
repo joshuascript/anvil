@@ -2,7 +2,7 @@
 
 ## Patch workflow & maintenance
 
-Patches in `anvil/patch/` are compiled to `anvil/patch/bin/` and auto-loaded via `LD_PRELOAD` by all launch scripts. Build all patches with `bash anvil/launch/patch_engine.sh`.
+Patches in `anvil/patches/` are compiled to `anvil/patches/bin/` and auto-loaded via `LD_PRELOAD` by all launch scripts. Build all patches with `bash anvil/launch/patch_engine.sh`.
 
 **Why:** libengine2.so and other native .so files update periodically and shift function offsets. Patches that use hardcoded offsets (libsbox_htmlcb_patch, libsbox_lightmapuv_patch) need the offset verified after each engine update. The finalizeload patch was converted to dynamic pattern scan so it never needs updating.
 

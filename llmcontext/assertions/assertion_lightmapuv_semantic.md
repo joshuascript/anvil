@@ -18,7 +18,7 @@ produces an invalid `VkVertexInputAttributeDescription`, and the NVIDIA driver c
 
 ## Fix
 
-`anvil/patch/libsbox_lightmapuv_patch.c` — extends the loop bound from 16 → 17 and writes a
+`anvil/patches/libsbox_lightmapuv_patch.c` — extends the loop bound from 16 → 17 and writes a
 new slot 16 entry mapping `"lightmapuv"` to the TEXCOORD usage class (`field8 = 0x322`,
 `field12 = 0x14`).
 

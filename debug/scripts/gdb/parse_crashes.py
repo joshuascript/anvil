@@ -39,7 +39,8 @@ class Thread:
 @dataclass
 class CrashFile:
     filename: str
-    sigsegv_n: int
+    signal: str
+    crash_n: int
     timestamp: str
     pc: str
     kind: str
@@ -53,7 +54,7 @@ class CrashFile:
 # ---------------------------------------------------------------------------
 
 RE_CRASH_HEADER = re.compile(
-    r'=== SIGSEGV #(\d+)\s+(\S+)\s+PC=(\S+)\s+kind=(\S+) ==='
+    r'=== (SIG\w+) #(\d+)\s+(\S+)\s+PC=(\S+)\s+kind=(\S+) ==='
 )
 RE_THREAD_HEADER = re.compile(
     r'^Thread (\d+) \(Thread (0x[0-9a-f]+) \(LWP (\d+)\) "([^"]+)"\):'
@@ -83,7 +84,7 @@ def parse_file(path: str) -> Optional[CrashFile]:
         lines = f.readlines()
 
     filename = os.path.basename(path)
-    sigsegv_n = timestamp = pc = kind = None
+    signal = crash_n = timestamp = pc = kind = None
     threads: list = []
     current_thread: Optional[Thread] = None
     section = None
@@ -96,7 +97,7 @@ def parse_file(path: str) -> Optional[CrashFile]:
 
         m = RE_CRASH_HEADER.match(line)
         if m:
-            sigsegv_n, timestamp, pc, kind = int(m.group(1)), m.group(2), m.group(3), m.group(4)
+            signal, crash_n, timestamp, pc, kind = m.group(1), int(m.group(2)), m.group(3), m.group(4), m.group(5)
             continue
 
         if '--- thread apply all bt ---' in line:
@@ -144,11 +145,11 @@ def parse_file(path: str) -> Optional[CrashFile]:
     if current_thread:
         threads.append(current_thread)
 
-    if sigsegv_n is None:
+    if crash_n is None:
         return None
 
     return CrashFile(
-        filename=filename, sigsegv_n=sigsegv_n, timestamp=timestamp,
+        filename=filename, signal=signal, crash_n=crash_n, timestamp=timestamp,
         pc=pc, kind=kind, threads=threads,
         registers='\n'.join(reg_lines) or None,
         disasm='\n'.join(disasm_lines) or None,
@@ -322,7 +323,7 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
         "",
         f"**Session:** `{session_dir}`",
         f"**Files:** {', '.join(f'`{cf.filename}`' for cf in crash_files)}",
-        f"**Total SIGSEGVs:** {len(crash_files)}",
+        f"**Total crashes:** {len(crash_files)}",
         f"**Unique named calls:** {len(unique_calls)}",
         "",
         "---",
@@ -362,7 +363,7 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
     for cf in crash_files:
         faulting = _find_faulting_thread(cf)
         out.append(
-            f"### SIGSEGV #{cf.sigsegv_n} - {cf.timestamp} @ `{cf.pc}` ({cf.kind})"
+            f"### {cf.signal} #{cf.crash_n} - {cf.timestamp} @ `{cf.pc}` ({cf.kind})"
         )
         out.append("")
         if cf.mappings:
@@ -415,7 +416,7 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
         else:
             for cf in crash_files:
                 if cf.disasm:
-                    out.append(f"### SIGSEGV #{cf.sigsegv_n} - PC - 24")
+                    out.append(f"### {cf.signal} #{cf.crash_n} - PC - 24")
                     out += ["", "```asm", cf.disasm, "```", ""]
 
     # Mappings appendix — deduplicated if identical across all files
@@ -430,7 +431,7 @@ def generate_markdown(crash_files: list, unique_calls: OrderedDict, session_dir:
         else:
             for cf in crash_files:
                 if cf.mappings:
-                    out.append(f"### SIGSEGV #{cf.sigsegv_n} - Address map")
+                    out.append(f"### {cf.signal} #{cf.crash_n} - Address map")
                     out += ["", "```", cf.mappings, "```", ""]
 
     return '\n'.join(out)

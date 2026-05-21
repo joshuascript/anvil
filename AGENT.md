@@ -11,8 +11,8 @@ All paths below are relative to `anvil/`.
 | `debug/scripts/gdb/` | GDB Python scripts — source inside a running GDB session |
 | `debug/scripts/binaryscan/` | Standalone ELF analysis tools — no running process needed |
 | `debug/logs/` | GDB trace output and CLR nullref logs |
-| `patch/` | LD_PRELOAD runtime patches for `libengine2.so` and other natives |
-| `patch/bin/` | Compiled `.so` patch binaries (auto-loaded by launch scripts) |
+| `patches/` | LD_PRELOAD runtime patches for `libengine2.so` and other natives |
+| `patches/bin/` | Compiled `.so` patch binaries (auto-loaded by launch scripts) |
 | `launch/sbox/` | Launch scripts for sbox and GDB sessions |
 | `launch/preload/` | Python preload scripts — run before the game to configure system state |
 | `llmcontext/` | Markdown write-ups of past bugs, crashes, and patch rationale |
@@ -72,18 +72,17 @@ that covers two unrelated bugs.
 
 ## Launch Scripts
 
-All launch scripts live in `launch/sbox/`. Each one invokes
-`launch/preload/inotify.py` before the game or GDB process so the inotify
-watch limit is raised for the session.
+All launch scripts live in `launch/sbox/`. Each one computes `REPO_ROOT` and
+execs `launch/preload/preload.py`, which handles patch loading and all preload
+setup before starting the game.
 
 ### `launch/sbox/launch-sbox.sh`
 
-Standard launch. Loads all `.so` files from `patch/bin/` via `LD_PRELOAD`, sets
-`SBOX_TRACE_DIR` to `debug/logs/`, and execs `game/sbox`.
+Standard launch. Execs `game/sbox` via `preload.py`.
 
 ### `launch/sbox/launch-sbox-gdb.sh`
 
-Same as above but launches under GDB. Source GDB scripts after attaching.
+Same as above but launches under GDB with `gdb-auto-bt.py` active.
 
 ### `launch/sbox/launch-sbox-server.sh`
 
@@ -92,8 +91,9 @@ Dedicated server variant (`game/sbox-server`).
 ### `launch/sbox/launch-sbox-finalizeload-bt.sh`
 
 Runs sbox under GDB with `gdb-finalizeload-bt.py` and `gdb-auto-bt.py` both
-active. Intentionally excludes `libsbox_finalizeload_patch.so` from `LD_PRELOAD`
-so the assertion `jge` is reachable and the breakpoint fires.
+active. Sets `ANVIL_SKIP_PATCHES=finalizeload` so `preload.py` omits
+`libsbox_finalizeload_patch.so`, leaving the `jge` assertion intact for the
+breakpoint to fire.
 
 ### `launch/sbox/launch-sbox-capture-steam-callbacks.sh`
 
@@ -108,8 +108,23 @@ wrapper object layout inspection.
 
 ## Preload Scripts
 
-Python scripts in `launch/preload/` run before the game process and handle
-system-level setup. All launch scripts invoke them automatically.
+All launch scripts exec `launch/preload/preload.py`, which does two things:
+
+1. **Patch loading** — loads `patches/bin/*.so` into `LD_PRELOAD`, sets
+   `LD_LIBRARY_PATH` and `SBOX_TRACE_DIR`. Respects `ANVIL_SKIP_PATCHES`
+   (comma-separated name fragments to exclude).
+
+2. **Script discovery** — imports every other `*.py` file in `launch/preload/`
+   alphabetically and calls its `setup()` function.
+
+To add a new preload step, drop a `.py` file in `launch/preload/` with a
+`setup()` function. No launch script changes needed.
+
+### `launch/preload/gameoverlay.py`
+
+Finds `gameoverlayrenderer.so` across common Steam install locations (native,
+Flatpak, package-manager) and prepends it to `LD_PRELOAD`. Warns but continues
+if the file is not found.
 
 ### `launch/preload/inotify.py`
 
@@ -135,7 +150,7 @@ handlers (`SIGTERM`, `SIGINT`, `SIGHUP`).
 Built with:
 
 ```bash
-bash anvil/launch/patch_engine.sh   # compiles all *.c in patch/ → patch/bin/*.so
+bash anvil/launch/patch_engine.sh   # compiles all *.c in patches/ → patches/bin/*.so
 ```
 
 All patches are auto-loaded via `LD_PRELOAD` by every launch script. Each patch
@@ -156,7 +171,7 @@ If verification fails (binary version mismatch after an engine update):
 
 ---
 
-### `patch/libsbox_finalizeload_patch.c`
+### `patches/libsbox_finalizeload_patch.c`
 
 Suppresses the spurious `Assert( pLoadingResource->GetExtRefDepth() > GetExtRefDepth() )`
 in `resourcesystem/loadingresource.cpp:1194`. Fires when a resource dependency
@@ -171,7 +186,7 @@ reference. See the offset history table in the patch source.
 
 ---
 
-### `patch/libsbox_lightmapuv_patch.c`
+### `patches/libsbox_lightmapuv_patch.c`
 
 Adds `LightmapUV` to the `SemanticNameToUsage()` lookup table in
 `librendersystemvulkan.so`. Without this, lightmapped mesh rendering hits
@@ -184,7 +199,7 @@ and verification command.
 
 ---
 
-### `patch/libsbox_htmlcb_patch.c`
+### `patches/libsbox_htmlcb_patch.c`
 
 Fixes an ABI mismatch in `libengine2.so`'s Steam HTML surface callback. On Linux,
 `steamclient.so` passes the browser handle as an integer in RSI; the engine
@@ -196,7 +211,7 @@ command.
 
 ---
 
-### `patch/libsbox_casemap.c`
+### `patches/libsbox_casemap.c`
 
 LD_PRELOAD shim that resolves wrong-cased file paths for s&box on Linux.
 The engine was written for Windows (case-insensitive NTFS); on Linux, paths

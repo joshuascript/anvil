@@ -56,11 +56,7 @@ def _restore(original: int) -> None:
         )
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <command> [args...]", file=sys.stderr)
-        sys.exit(1)
-
+def setup() -> None:
     current = _read_current()
 
     if current >= TARGET:
@@ -110,7 +106,6 @@ def main() -> None:
                 )
                 atexit.register(_restore, current)
 
-                # Restore on common termination signals too.
                 def _sig_handler(signum, _frame):
                     _restore(current)
                     signal.signal(signum, signal.SIG_DFL)
@@ -127,8 +122,15 @@ def main() -> None:
 
     print(file=sys.stderr)
 
-    cmd = sys.argv[1:]
-    proc = subprocess.run(cmd)
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <command> [args...]", file=sys.stderr)
+        sys.exit(1)
+
+    setup()
+
+    proc = subprocess.run(sys.argv[1:])
     sys.exit(proc.returncode)
 
 

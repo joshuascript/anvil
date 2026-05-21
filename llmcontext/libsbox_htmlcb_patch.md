@@ -17,7 +17,7 @@ rsi = 0x2                        ← browser handle integer, not a pointer
 
 ## Fix
 
-`anvil/patch/libsbox_htmlcb_patch.c` — LD_PRELOAD shim that interposes `dlopen`. When
+`anvil/patches/libsbox_htmlcb_patch.c` — LD_PRELOAD shim that interposes `dlopen`. When
 `dlopen("libengine2.so", ...)` returns, it locates the function via `dl_iterate_phdr` and
 replaces the 3-byte `mov (%rsi),%rsi` (`48 8b 36`) with `xor rsi,rsi` (`48 31 f6`). This
 zeroes RSI at that point, equivalent to the null branch the function already handles.
@@ -49,16 +49,16 @@ with open('game/bin/linuxsteamrt64/libengine2.so','rb') as f:
 | 2026-05-18 | `0x34d186` | Original |
 | 2026-05-19 | `0x34d1a6` | After libengine2.so update; function gained `endbr64` + stack canary prologue (+0x20) |
 
-Current offset in source: `CRASH_INSN_OFFSET` in `anvil/patch/libsbox_htmlcb_patch.c`.
+Current offset in source: `CRASH_INSN_OFFSET` in `anvil/patches/libsbox_htmlcb_patch.c`.
 
 ## Build and deployment
 
 ```bash
-bash anvil/launch/patch_engine.sh   # builds all .so files in anvil/patch/bin/
+bash anvil/launch/patch_engine.sh   # builds all .so files in anvil/patches/bin/
 ```
 
 The launch scripts (`anvil/launch/launch-sbox.sh`, `launch-sbox-capture-steam-callbacks.sh`)
-auto-load all `.so` files from `anvil/patch/bin/` via `LD_PRELOAD`.
+auto-load all `.so` files from `anvil/patches/bin/` via `LD_PRELOAD`.
 
 Successful patch prints to stderr at startup:
 ```

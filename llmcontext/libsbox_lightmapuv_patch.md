@@ -68,7 +68,7 @@ Verification failure (binary version mismatch) prints:
 ## Build and deployment
 
 ```bash
-bash anvil/launch/patch_engine.sh   # builds all .so files in anvil/patch/bin/
+bash anvil/launch/patch_engine.sh   # builds all .so files in anvil/patches/bin/
 ```
 
-Auto-loaded by all launch scripts via `LD_PRELOAD` from `anvil/patch/bin/`.
+Auto-loaded by all launch scripts via `LD_PRELOAD` from `anvil/patches/bin/`.

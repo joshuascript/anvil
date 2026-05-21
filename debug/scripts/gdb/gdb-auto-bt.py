@@ -1,20 +1,27 @@
 """
-gdb-auto-bt.py — GDB Python init script for automated SIGSEGV capture.
+gdb-auto-bt.py — GDB Python init script for automated crash capture.
 
 Source from GDB:  source /path/to/gdb-auto-bt.py
 
-On every SIGSEGV:
-  1. Determines whether the PC falls inside a named shared library or in an
-     anonymous mmap region (JIT'd .NET code).
-  2. JIT-range crashes: the .NET CLR uses SIGSEGV internally to implement
-     NullReferenceException.  We capture the bt for reference but forward the
-     signal back to the process so the CLR's own handler can convert it into a
-     managed exception.  Without forwarding, the CLR never sees the signal and
-     the same instruction faults repeatedly.
-  3. Named-library crashes: a real native crash.  Capture bt and continue
-     without forwarding the signal (the default) so execution resumes past the
-     faulting instruction.
-  4. Writes to gdb/crash_NNN.txt (numbered, relative to this script's directory).
+Handles SIGSEGV and SIGABRT:
+
+  SIGSEGV:
+    1. Determines whether the PC falls inside a named shared library or in an
+       anonymous mmap region (JIT'd .NET code).
+    2. JIT-range crashes: the .NET CLR uses SIGSEGV internally to implement
+       NullReferenceException.  We capture the bt for reference but forward the
+       signal back to the process so the CLR's own handler can convert it into a
+       managed exception.  Without forwarding, the CLR never sees the signal and
+       the same instruction faults repeatedly.
+    3. Named-library crashes: a real native crash.  Capture bt and continue
+       without forwarding the signal so execution resumes past the faulting
+       instruction.
+
+  SIGABRT:
+    Triggered by abort() — e.g. free(): invalid pointer, assert failures.
+    Captures bt then forwards SIGABRT so the process terminates normally.
+
+  Writes crash_NNN.txt to SBOX_TRACE_DIR/<session>/.
 """
 try:
     import gdb
@@ -63,7 +70,10 @@ else:
         return False
 
     def _on_stop(event):
-        if not isinstance(event, gdb.SignalEvent) or event.stop_signal != "SIGSEGV":
+        if not isinstance(event, gdb.SignalEvent):
+            return
+        sig = event.stop_signal
+        if sig not in ("SIGSEGV", "SIGABRT"):
             return
 
         gdb._auto_bt["crash_count"] += 1
@@ -76,13 +86,17 @@ else:
             pc = 0
             pc_str = "unknown"
 
-        in_library = _pc_in_named_library(pc)
-        crash_kind = "native" if in_library else "jit/clr"
+        if sig == "SIGABRT":
+            crash_kind = "abort"
+        elif _pc_in_named_library(pc):
+            crash_kind = "native"
+        else:
+            crash_kind = "jit/clr"
 
         path = os.path.join(gdb._auto_bt["out_dir"], f"crash_{n:03d}.txt")
 
         sections = [
-            (f"=== SIGSEGV #{n}  {datetime.datetime.now().isoformat()}  PC={pc_str}  kind={crash_kind} ===\n\n", None),
+            (f"=== {sig} #{n}  {datetime.datetime.now().isoformat()}  PC={pc_str}  kind={crash_kind} ===\n\n", None),
             ("--- thread apply all bt ---\n", "thread apply all bt"),
             ("--- info registers ---\n",      "info registers"),
             ("--- x/16i $pc-24 ---\n",        "x/16i $pc-24"),
@@ -101,7 +115,10 @@ else:
 
         gdb.write(f"[auto-bt] crash #{n} ({crash_kind}) saved → {path}\n")
 
-        if in_library:
+        if sig == "SIGABRT":
+            # Process is aborting — capture is done, forward the signal and let it die.
+            gdb.post_event(lambda: gdb.execute("signal SIGABRT"))
+        elif crash_kind == "native":
             gdb.post_event(lambda: gdb.execute("continue"))
         else:
             gdb.post_event(lambda: gdb.execute("signal SIGSEGV"))

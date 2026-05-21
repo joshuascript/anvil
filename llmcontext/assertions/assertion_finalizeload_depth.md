@@ -20,7 +20,7 @@ non-assertion path — no behavioural difference between the two paths.
 
 ## Fix
 
-`anvil/patch/libsbox_finalizeload_patch.c` — dynamically scans `libengine2.so`'s executable
+`anvil/patches/libsbox_finalizeload_patch.c` — dynamically scans `libengine2.so`'s executable
 PT_LOAD segment at runtime for the `mov/cmp/jge` byte pattern and NOPs the `jge`, making
 execution always fall through without triggering the assertion.
 
