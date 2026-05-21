@@ -45,16 +45,28 @@ Do not mark a fix as confirmed or write a Verification section in llmcontext unt
 
 Each `.c` file compiles to `patches/bin/<name>.so` and is auto-loaded by every launch script via `LD_PRELOAD`. Each patch hooks `dlopen` to fire when the target `.so` loads, then prints `[<name>_patch] installed — ...` to stderr on success, or a mismatch warning if the binary has changed.
 
-Two offset strategies are used — know which applies before editing:
+All patches use dynamic scanning — no hardcoded offsets remain. Each patch self-locates its target at runtime and prints a mismatch warning to stderr if the binary has changed in a way that breaks the pattern.
 
-| Patch | Strategy | Notes |
-|-------|----------|-------|
-| `libsbox_finalizeload_patch.c` | Dynamic pattern scan | Self-maintaining; no offset to update |
-| `libsbox_lightmapuv_patch.c` | Hardcoded offset | Must verify after engine updates |
-| `libsbox_htmlcb_patch.c` | Hardcoded offset | Must verify after engine updates |
-| `libsbox_casemap.c` | syscall interception | No offsets; intercepts libc filesystem calls |
+| Patch | Strategy | Test script |
+|-------|----------|-------------|
+| `libsbox_finalizeload_patch.c` | Pattern scan in `.text` | `test_finalizeload_patch.py` |
+| `libsbox_lightmapuv_patch.c` | Data-anchored table scan | `test_lightmapuv_patch.py` |
+| `libsbox_htmlcb_patch.c` | Pattern scan in `.text` | `test_htmlcb_patch.py` |
+| `libsbox_casemap.c` | libc syscall interposition | *(no binary offsets — no test needed)* |
 
-For hardcoded-offset patches, the offset history and verification command live in the corresponding `llmcontext/libsbox_<name>_patch.md`.
+#### Checking for stale patches after an engine update
+
+Run all test scripts before launching:
+
+```bash
+python3 anvil/debug/scripts/binaryscan/test_finalizeload_patch.py
+python3 anvil/debug/scripts/binaryscan/test_lightmapuv_patch.py
+python3 anvil/debug/scripts/binaryscan/test_htmlcb_patch.py
+```
+
+Each script exits 0 (`PASS  all checks`) if the patch will apply cleanly, or exits 1 with a `FAIL` line describing what broke. A failing script means the corresponding C patch needs its pattern updated before the next launch. Use `pattern_scan.py` and `cross_ref.py` to locate the new pattern context around the affected instruction.
+
+The offset history and patch rationale for each patch live in the corresponding `llmcontext/libsbox_<name>_patch.md`.
 
 ### Launch Scripts (`launch/sbox/`)
 
