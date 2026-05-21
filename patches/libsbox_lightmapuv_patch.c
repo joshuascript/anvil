@@ -1,5 +1,5 @@
 /*
- * libsbox_lightmapuv_patch.c
+ * libsbox_lightmapuv_patch.c  (v3 — data-anchored dynamic scan)
  *
  * Adds "lightmapuv" as a recognised vertex semantic in librendersystemvulkan.so,
  * preventing a crash inside libnvidia-glcore.so when rendering lightmapped geometry.
@@ -7,53 +7,50 @@
  * Root cause
  * ----------
  * SemanticNameToUsage() in vulkan/inputlayoutvulkan.cpp contains a 16-entry
- * lookup table of known vertex semantic names.  "LightmapUV" is used by Source 2
- * lightmapped meshes but is absent from the Vulkan renderer's table.  When a
- * mesh with a LightmapUV attribute is encountered the function fires:
+ * lookup table of known vertex semantic names.  "LightmapUV" is absent from
+ * the table.  When a lightmapped mesh is rendered the function asserts
+ * "Unknown semantic name 'LightmapUV'", returns a garbage usage value, and
+ * the NVIDIA driver crashes on the invalid VkVertexInputAttributeDescription.
  *
- *   Assertion Failed in function `SemanticNameToUsage()`:
- *   Unknown semantic name 'LightmapUV'
+ * Strategy — data-anchored, not code-anchored
+ * -------------------------------------------
+ * Previous versions scanned .text for specific loop instruction encodings.
+ * Those patterns break whenever the compiler changes register allocation.
  *
- * The assertion is non-fatal (logs and continues), but the function returns an
- * uninitialised/garbage usage value.  That value populates a
- * VkVertexInputAttributeDescription with an out-of-range location, which the
- * NVIDIA driver then crashes on inside libnvidia-glcore.so.
+ * This version anchors on the TABLE CONTENT, which is source-level string
+ * literal data and stays stable across recompilations:
  *
- * Table layout (16 entries × 16 bytes, VA/file-offset 0x737560)
- * --------------------------------------------------------------
- * Each entry:
- *   [0..7]  : 8-byte pointer to semantic name string (R_X86_64_RELATIVE reloc)
- *   [8..11] : uint32 usage field (field8)
- *   [12..15]: uint32 index modifier (field12)
+ *   Entry 0: ptr → "position",     field8=0, field12=0
+ *   Entry 1: ptr → "blendweight",  field8=1, field12=0
+ *   Entry 2: ptr → "blendindices", field8=2, field12=0
  *
- * The loop iterates r13 = 0..15 and asserts when r13 reaches 16 (0x10):
- *   0x1292f8: 41 83 fd 10   cmp r13d, 0x10
- *   0x1292fc: 0f 84 ...     je  <assertion>
+ * Three matching consecutive entries uniquely identify the table regardless
+ * of where it lands after ASLR.
  *
- * Fix
- * ---
- * Two changes applied at runtime after librendersystemvulkan.so is loaded:
+ * Once the table is found:
+ *   1. Entry 16 is written unconditionally at table_base + 256.
+ *   2. The .text segment is scanned for RIP-relative LEAs that reference
+ *      table_base.  Within ±512 bytes of each LEA, any `cmp $0x10, %reg`
+ *      followed by a conditional jump is patched 0x10 → 0x11.
  *
- * 1. Patch the loop bound: change `cmp r13d, 0x10` → `cmp r13d, 0x11`
- *    (single byte change at offset 0x1292fb: 0x10 → 0x11)
+ * Entry 16 is written even if no bounds are found (graceful degradation —
+ * a subsequent `find_bounds` run can patch the byte separately).
  *
- * 2. Write a valid entry at table slot 16 (VA 0x737660):
- *    - pointer → our static "lightmapuv" string
- *    - field8  = 0x322  (same as "texcoord" — maps to TEXCOORD usage class)
- *    - field12 = 0x14   (same as "texcoord" — index base offset)
+ * Table entry layout (16 bytes):
+ *   [0..7]  : 8-byte pointer to semantic name string (R_X86_64_RELATIVE)
+ *   [8..11] : uint32 field8  — usage class (0x0005 = TEXCOORD, same as "texcoord")
+ *   [12..15]: uint32 field12 — index modifier (0x0000 = none)
  *
- * The table page uses R_X86_64_RELATIVE relocations so it lives in a
- * writable segment (.data.rel.ro, made writable by the dynamic linker before
- * being re-protected).  We mprotect it writable, write the entry, and restore.
- *
- * Offset history (librendersystemvulkan.so)
- * -----------------------------------------
- * Date       | CMP offset  | Table offset | Notes
- * 2026-05-20 | 0x1292fb    | 0x737660     | Initial
+ * Observed at runtime (librendersystemvulkan.so, 2026-05-20)
+ * ----------------------------------------------------------
+ * Table base offset:  0x737560 (VMA; file offset 0x736560 due to segment delta)
+ * Bound A offset:     0x128d39 (function with %ebx counter)
+ * Bound B offset:     0x1292fb (function with %r13d counter)
  */
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <elf.h>
 #include <link.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -62,31 +59,63 @@
 #include <string.h>
 #include <pthread.h>
 
-/* Offset of the byte '0x10' inside `cmp r13d, 0x10` (41 83 fd [10]) */
-#define CMP_BOUND_OFFSET    0x1292fbUL
-
-/* VA/file-offset of entry slot 16 in the semantic lookup table */
-#define TABLE_ENTRY16_OFFSET 0x737660UL
-
-/* Usage values matching the "texcoord" entry (maps LightmapUV → TEXCOORD class) */
-#define LIGHTMAPUV_FIELD8   0x322u
-#define LIGHTMAPUV_FIELD12  0x14u
-
 static const char lightmapuv_str[] = "lightmapuv";
+#define LIGHTMAPUV_FIELD8   0x0005u   /* TEXCOORD usage class — matches "texcoord" entry */
+#define LIGHTMAPUV_FIELD12  0x0000u   /* no index modifier */
 
 static pthread_once_t patch_once = PTHREAD_ONCE_INIT;
 
-struct find_result { uintptr_t base; int found; };
+/* ── segment collection ───────────────────────────────────────── */
 
-static int find_vulkan(struct dl_phdr_info *info, size_t size, void *data)
+#define MAX_SEGS 8
+
+struct lib_info {
+    uintptr_t base;
+    uintptr_t range_lo, range_hi;
+    struct { uintptr_t start; size_t size; int exec; } segs[MAX_SEGS];
+    int nseg, found;
+};
+
+static int collect_segs(struct dl_phdr_info *info, size_t sz, void *data)
 {
-    (void)size;
-    if (info->dlpi_name && strstr(info->dlpi_name, "librendersystemvulkan.so")) {
-        ((struct find_result *)data)->base  = (uintptr_t)info->dlpi_addr;
-        ((struct find_result *)data)->found = 1;
-        return 1;
+    (void)sz;
+    if (!info->dlpi_name || !strstr(info->dlpi_name, "librendersystemvulkan.so"))
+        return 0;
+
+    struct lib_info *li = data;
+    li->base     = info->dlpi_addr;
+    li->range_lo = UINTPTR_MAX;
+    li->range_hi = 0;
+    li->found    = 1;
+
+    for (int i = 0; i < info->dlpi_phnum && li->nseg < MAX_SEGS; i++) {
+        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
+        if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_R) || !ph->p_filesz)
+            continue;
+        uintptr_t start = info->dlpi_addr + ph->p_vaddr;
+        size_t    size  = ph->p_filesz;
+        li->segs[li->nseg].start = start;
+        li->segs[li->nseg].size  = size;
+        li->segs[li->nseg].exec  = !!(ph->p_flags & PF_X);
+        li->nseg++;
+        if (start < li->range_lo)        li->range_lo = start;
+        if (start + size > li->range_hi) li->range_hi = start + size;
     }
-    return 0;
+    return 1;
+}
+
+/* ── helpers ──────────────────────────────────────────────────── */
+
+static int ptr_valid(struct lib_info *li, uintptr_t p, size_t len)
+{
+    return p >= li->range_lo && p + len <= li->range_hi;
+}
+
+static int str_at(struct lib_info *li, uintptr_t ptr, const char *s)
+{
+    size_t len = strlen(s);
+    return ptr_valid(li, ptr, len + 1) &&
+           memcmp((const void *)ptr, s, len + 1) == 0;
 }
 
 static void mprotect_page(void *addr, int prot)
@@ -94,66 +123,161 @@ static void mprotect_page(void *addr, int prot)
     long  pgsz = getpagesize();
     void *page = (void *)((uintptr_t)addr & ~(uintptr_t)(pgsz - 1));
     if (mprotect(page, (size_t)pgsz, prot) != 0)
-        perror("[lightmapuv_patch] mprotect failed");
+        perror("[lightmapuv_patch] mprotect");
 }
+
+/* ── table finder (data-anchored) ─────────────────────────────── */
+
+static uintptr_t find_table(struct lib_info *li)
+{
+    for (int s = 0; s < li->nseg; s++) {
+        if (li->segs[s].exec) continue;   /* table is in data, not .text */
+
+        uint8_t *mem = (uint8_t *)li->segs[s].start;
+        size_t   sz  = li->segs[s].size;
+
+        /* walk 16-byte-aligned positions */
+        size_t off = (16 - ((uintptr_t)mem % 16)) % 16;
+        for (size_t i = off; i + 48 <= sz; i += 16) {
+            uint64_t p0, p1, p2;
+            uint32_t f0_8, f0_12, f1_8, f1_12, f2_8, f2_12;
+            memcpy(&p0,    mem+i,    8); memcpy(&f0_8,  mem+i+8,  4); memcpy(&f0_12, mem+i+12, 4);
+            memcpy(&p1,    mem+i+16, 8); memcpy(&f1_8,  mem+i+24, 4); memcpy(&f1_12, mem+i+28, 4);
+            memcpy(&p2,    mem+i+32, 8); memcpy(&f2_8,  mem+i+40, 4); memcpy(&f2_12, mem+i+44, 4);
+
+            if (f0_8 != 0 || f0_12 != 0 ||
+                f1_8 != 1 || f1_12 != 0 ||
+                f2_8 != 2 || f2_12 != 0) continue;
+
+            if (!str_at(li, p0, "position"))     continue;
+            if (!str_at(li, p1, "blendweight"))   continue;
+            if (!str_at(li, p2, "blendindices"))  continue;
+
+            return (uintptr_t)(mem + i);
+        }
+    }
+    return 0;
+}
+
+/* ── bound patcher (code scan near table references) ─────────── */
+
+/*
+ * Scan .text for any RIP-relative LEA that resolves to table_base.
+ * Within ±512 bytes of each LEA, find `cmp $0x10, %<reg>` followed by
+ * a conditional jump and patch the immediate 0x10 → 0x11.
+ *
+ * cmp $0x10 encodings:
+ *   83 [F8-FF] 10      — 32-bit register (eax/ecx/edx/ebx/esp/ebp/esi/edi)
+ *   41 83 [F8-FF] 10   — r8d–r15d (REX.B extends ModRM.rm)
+ */
+static int patch_bounds(struct lib_info *li, uintptr_t table_base)
+{
+    int patched = 0;
+
+    for (int s = 0; s < li->nseg; s++) {
+        if (!li->segs[s].exec) continue;
+
+        uint8_t *text  = (uint8_t *)li->segs[s].start;
+        size_t   limit = li->segs[s].size;
+
+        for (size_t i = 0; i + 8 <= limit; i++) {
+            /* RIP-relative LEA: REX(0x48-0x4f) 0x8d ModRM(mod=00,rm=101) disp32 */
+            if (text[i] < 0x48 || text[i] > 0x4f) continue;
+            if (text[i+1] != 0x8d)                 continue;
+            if ((text[i+2] & 0xc7) != 0x05)        continue;  /* mod=00, rm=101 */
+
+            int32_t disp;
+            memcpy(&disp, text + i + 3, 4);
+            uintptr_t resolved = (uintptr_t)(text + i + 7) + (uintptr_t)(intptr_t)disp;
+            if (resolved != table_base) continue;
+
+            /* Scan ±512 bytes for cmp $0x10, %reg + conditional jump */
+            ssize_t lo = (ssize_t)i - 512, hi = (ssize_t)i + 512;
+            if (lo < 0) lo = 0;
+            if ((size_t)hi > limit - 4) hi = (ssize_t)(limit - 4);
+
+            for (ssize_t j = lo; j < hi; j++) {
+                uint8_t *p = text + j, *bound = NULL, *after = NULL;
+
+                if (p[0] == 0x83 && (p[1] & 0xf8) == 0xf8 && p[2] == 0x10) {
+                    bound = p + 2; after = p + 3;
+                } else if (p[0] == 0x41 && p[1] == 0x83 &&
+                           (p[2] & 0xf8) == 0xf8 && p[3] == 0x10) {
+                    bound = p + 3; after = p + 4;
+                }
+
+                if (!bound || *bound != 0x10) continue;
+
+                /* Must be followed by je or jne — confirm it's the assert branch */
+                int cjmp = (*after == 0x74 || *after == 0x75) ||
+                           (*after == 0x0f && (*(after+1) == 0x84 || *(after+1) == 0x85));
+                if (!cjmp) continue;
+
+                mprotect_page(bound, PROT_READ | PROT_WRITE | PROT_EXEC);
+                *bound = 0x11;
+                mprotect_page(bound, PROT_READ | PROT_EXEC);
+
+                fprintf(stderr,
+                        "[lightmapuv_patch] bound patched at offset 0x%lx (0x10→0x11)\n",
+                        (uintptr_t)bound - li->base);
+                patched++;
+            }
+        }
+    }
+    return patched;
+}
+
+/* ── main patch ───────────────────────────────────────────────── */
 
 static void do_patch(void)
 {
-    struct find_result res = { 0, 0 };
-    dl_iterate_phdr(find_vulkan, &res);
+    struct lib_info li = { 0 };
+    dl_iterate_phdr(collect_segs, &li);
 
-    if (!res.found) {
-        fprintf(stderr, "[lightmapuv_patch] librendersystemvulkan.so not found — patch not installed\n");
+    if (!li.found) {
+        fprintf(stderr, "[lightmapuv_patch] librendersystemvulkan.so not found\n");
         return;
     }
 
-    uintptr_t base = res.base;
-
-    /* ------------------------------------------------------------------ *
-     * Patch 1: extend loop bound 0x10 → 0x11                             *
-     * ------------------------------------------------------------------ */
-    uint8_t *cmp_byte = (uint8_t *)(base + CMP_BOUND_OFFSET);
-
-    if (*cmp_byte != 0x10) {
-        fprintf(stderr,
-                "[lightmapuv_patch] unexpected byte 0x%02x at 0x%lx+0x%lx "
-                "— patch skipped (binary version mismatch?)\n",
-                *cmp_byte, base, CMP_BOUND_OFFSET);
+    /* 1. Locate the semantic table by content */
+    uintptr_t table_base = find_table(&li);
+    if (!table_base) {
+        fprintf(stderr, "[lightmapuv_patch] semantic table not found — patch not installed\n");
         return;
     }
+    fprintf(stderr, "[lightmapuv_patch] table at offset 0x%lx\n", table_base - li.base);
 
-    mprotect_page(cmp_byte, PROT_READ | PROT_WRITE | PROT_EXEC);
-    *cmp_byte = 0x11;
-    mprotect_page(cmp_byte, PROT_READ | PROT_EXEC);
+    /* 2. Write entry 16 at table_base + 256 */
+    uint8_t  *entry  = (uint8_t *)(table_base + 16 * 16);
+    uintptr_t p1     = (uintptr_t)entry        & ~(uintptr_t)(getpagesize()-1);
+    uintptr_t p2     = ((uintptr_t)entry + 15) & ~(uintptr_t)(getpagesize()-1);
 
-    /* ------------------------------------------------------------------ *
-     * Patch 2: write entry 16 into the semantic lookup table              *
-     * ------------------------------------------------------------------ */
-    uint8_t *entry = (uint8_t *)(base + TABLE_ENTRY16_OFFSET);
+    mprotect_page(entry,      PROT_READ | PROT_WRITE);
+    if (p2 != p1) mprotect_page(entry + 15, PROT_READ | PROT_WRITE);
 
-    mprotect_page(entry, PROT_READ | PROT_WRITE);
-
-    /* string pointer (8 bytes) */
     uintptr_t str_va = (uintptr_t)lightmapuv_str;
-    memcpy(entry,     &str_va,              8);
+    uint32_t  f8 = LIGHTMAPUV_FIELD8, f12 = LIGHTMAPUV_FIELD12;
+    memcpy(entry,      &str_va, 8);
+    memcpy(entry + 8,  &f8,     4);
+    memcpy(entry + 12, &f12,    4);
 
-    /* field8 (uint32) */
-    uint32_t f8 = LIGHTMAPUV_FIELD8;
-    memcpy(entry + 8, &f8, 4);
-
-    /* field12 (uint32) */
-    uint32_t f12 = LIGHTMAPUV_FIELD12;
-    memcpy(entry + 12, &f12, 4);
-
-    mprotect_page(entry, PROT_READ);
+    mprotect_page(entry,      PROT_READ);
+    if (p2 != p1) mprotect_page(entry + 15, PROT_READ);
 
     fprintf(stderr,
-            "[lightmapuv_patch] installed — base=0x%lx  "
-            "cmp_byte=0x%lx (0x10→0x11)  entry16=0x%lx → \"%s\"\n",
-            base,
-            (uintptr_t)cmp_byte,
-            (uintptr_t)entry,
-            lightmapuv_str);
+            "[lightmapuv_patch] entry 16 written at offset 0x%lx "
+            "→ \"%s\" (field8=0x%04x field12=0x%04x)\n",
+            (uintptr_t)entry - li.base,
+            lightmapuv_str, LIGHTMAPUV_FIELD8, LIGHTMAPUV_FIELD12);
+
+    /* 3. Patch loop bounds near table references */
+    int n = patch_bounds(&li, table_base);
+    if (n == 0)
+        fprintf(stderr,
+                "[lightmapuv_patch] WARNING: entry written but no loop bounds found — "
+                "lightmapuv will not be reached until bounds are patched manually\n");
+    else
+        fprintf(stderr, "[lightmapuv_patch] installed — %d loop bound(s) patched\n", n);
 }
 
 void *dlopen(const char *filename, int flags)
