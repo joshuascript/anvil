@@ -147,7 +147,7 @@ static void do_patch(void)
     fprintf(stderr,
             "[htmlcb_patch] installed — pattern@0x%lx  insn@0x%lx  "
             "(mov rsi,[rsi] → xor rsi,rsi)\n",
-            (uintptr_t)match - (uintptr_t)res.text_start + res.text_start,
+            (uintptr_t)match,
             (uintptr_t)insn);
 }
 

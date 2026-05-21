@@ -59,7 +59,8 @@ There are **two functions** that loop over this table — both share the same ta
 ## Fix
 
 `anvil/patches/libsbox_lightmapuv_patch.c` — LD_PRELOAD shim that fires when
-`librendersystemvulkan.so` is `dlopen`'d. Uses a **data-anchored** scan strategy:
+`librendersystemvulkan.so` is `dlopen`'d. Also adds `VertexPaintBlendParams` (slot 17)
+in the same pass. Uses a **data-anchored** scan strategy:
 
 ### 1. Table location (data-anchored, not code-anchored)
 Scans non-exec PT_LOAD segments for three consecutive 16-byte entries matching:
@@ -70,25 +71,25 @@ Scans non-exec PT_LOAD segments for three consecutive 16-byte entries matching:
 This anchors on source-level string literals in `.rodata` — stable across recompilations
 regardless of register allocation, instruction encoding, or ASLR.
 
-### 2. Entry 16 write
-Writes to `table_base + 256` (slot 16):
-- string ptr → `"lightmapuv"` (static string in the patch .so)
-- field8 = `0x0005` (TEXCOORD usage class — matches `texcoord` entry)
-- field12 = `0x0000` (no index modifier)
+### 2. Entry writes
+Writes two new entries unconditionally once the table is found:
 
-Entry is written unconditionally once the table is found (graceful degradation).
+- Slot 16 at `table_base + 256`: `"lightmapuv"`, field8=`0x0005`, field12=`0x0000`
+- Slot 17 at `table_base + 272`: `"vertexpaintblendparams"`, field8=`0x0005`, field12=`0x0000`
+
+String pointers point into the patch `.so`'s `.rodata` — no dependency on the target binary.
 
 ### 3. Loop bound patching
 Scans `.text` for RIP-relative LEAs that resolve to `table_base`. Within ±512 bytes
 of each LEA, patches any `cmp $0x10, %<reg>` followed by a conditional jump:
-`0x10` → `0x11`. Covers all register choices the compiler might use.
+`0x10` → `0x12` (covers slots 0–17). Covers all register choices the compiler might use.
 
 ## Validation
 
 Run after any engine update to verify the patch will work:
 
 ```bash
-python3 anvil/debug/scripts/binaryscan/test_lightmapuv_patch.py
+python3 anvil/debug/scripts/tests/test_lightmapuv_patch.py
 ```
 
 Expected output: `PASS  all checks`. If `find_table` fails, the semantic strings
@@ -125,7 +126,8 @@ Successful patch prints to stderr:
 ```
 [lightmapuv_patch] table at offset 0x737560
 [lightmapuv_patch] entry 16 written at offset 0x737660 → "lightmapuv" (field8=0x0005 field12=0x0000)
-[lightmapuv_patch] bound patched at offset 0x128d39 (0x10→0x11)
-[lightmapuv_patch] bound patched at offset 0x1292fb (0x10→0x11)
-[lightmapuv_patch] installed — 2 loop bound(s) patched
+[lightmapuv_patch] entry 17 written at offset 0x737670 → "vertexpaintblendparams" (field8=0x0005 field12=0x0000)
+[lightmapuv_patch] bound patched at offset 0x128d39 (0x10→0x12)
+[lightmapuv_patch] bound patched at offset 0x1292fb (0x10→0x12)
+[lightmapuv_patch] installed — entries 16+17 written, 2 loop bound(s) patched
 ```

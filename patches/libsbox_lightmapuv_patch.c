@@ -1,8 +1,9 @@
 /*
- * libsbox_lightmapuv_patch.c  (v3 — data-anchored dynamic scan)
+ * libsbox_lightmapuv_patch.c  (v4 — adds lightmapuv + vertexpaintblendparams)
  *
- * Adds "lightmapuv" as a recognised vertex semantic in librendersystemvulkan.so,
- * preventing a crash inside libnvidia-glcore.so when rendering lightmapped geometry.
+ * Adds "lightmapuv" (slot 16) and "vertexpaintblendparams" (slot 17) as recognised
+ * vertex semantics in librendersystemvulkan.so, preventing crashes and assertions
+ * from SemanticNameToUsage() when rendering lightmapped or vertex-painted geometry.
  *
  * Root cause
  * ----------
@@ -28,10 +29,10 @@
  * of where it lands after ASLR.
  *
  * Once the table is found:
- *   1. Entry 16 is written unconditionally at table_base + 256.
+ *   1. Entries 16 and 17 are written unconditionally at table_base + 256/272.
  *   2. The .text segment is scanned for RIP-relative LEAs that reference
  *      table_base.  Within ±512 bytes of each LEA, any `cmp $0x10, %reg`
- *      followed by a conditional jump is patched 0x10 → 0x11.
+ *      followed by a conditional jump is patched 0x10 → 0x12.
  *
  * Entry 16 is written even if no bounds are found (graceful degradation —
  * a subsequent `find_bounds` run can patch the byte separately).
@@ -59,9 +60,13 @@
 #include <string.h>
 #include <pthread.h>
 
-static const char lightmapuv_str[] = "lightmapuv";
+static const char lightmapuv_str[]             = "lightmapuv";
 #define LIGHTMAPUV_FIELD8   0x0005u   /* TEXCOORD usage class — matches "texcoord" entry */
-#define LIGHTMAPUV_FIELD12  0x0000u   /* no index modifier */
+#define LIGHTMAPUV_FIELD12  0x0000u
+
+static const char vertexpaintblendparams_str[] = "vertexpaintblendparams";
+#define VERTEXPAINTBLENDPARAMS_FIELD8   0x0005u   /* TEXCOORD — same class as vertexpainttintcolor */
+#define VERTEXPAINTBLENDPARAMS_FIELD12  0x0000u
 
 static pthread_once_t patch_once = PTHREAD_ONCE_INIT;
 
@@ -164,7 +169,7 @@ static uintptr_t find_table(struct lib_info *li)
 /*
  * Scan .text for any RIP-relative LEA that resolves to table_base.
  * Within ±512 bytes of each LEA, find `cmp $0x10, %<reg>` followed by
- * a conditional jump and patch the immediate 0x10 → 0x11.
+ * a conditional jump and patch the immediate 0x10 → 0x12 (covers slots 0-17).
  *
  * cmp $0x10 encodings:
  *   83 [F8-FF] 10      — 32-bit register (eax/ecx/edx/ebx/esp/ebp/esi/edi)
@@ -214,11 +219,11 @@ static int patch_bounds(struct lib_info *li, uintptr_t table_base)
                 if (!cjmp) continue;
 
                 mprotect_page(bound, PROT_READ | PROT_WRITE | PROT_EXEC);
-                *bound = 0x11;
+                *bound = 0x12;  /* cover slots 0-17: lightmapuv (16) + vertexpaintblendparams (17) */
                 mprotect_page(bound, PROT_READ | PROT_EXEC);
 
                 fprintf(stderr,
-                        "[lightmapuv_patch] bound patched at offset 0x%lx (0x10→0x11)\n",
+                        "[lightmapuv_patch] bound patched at offset 0x%lx (0x10→0x12)\n",
                         (uintptr_t)bound - li->base);
                 patched++;
             }
@@ -270,14 +275,37 @@ static void do_patch(void)
             (uintptr_t)entry - li.base,
             lightmapuv_str, LIGHTMAPUV_FIELD8, LIGHTMAPUV_FIELD12);
 
+    /* 2b. Write entry 17 — vertexpaintblendparams */
+    uint8_t  *entry17 = (uint8_t *)(table_base + 17 * 16);
+    uintptr_t p1b     = (uintptr_t)entry17        & ~(uintptr_t)(getpagesize()-1);
+    uintptr_t p2b     = ((uintptr_t)entry17 + 15) & ~(uintptr_t)(getpagesize()-1);
+
+    mprotect_page(entry17,      PROT_READ | PROT_WRITE);
+    if (p2b != p1b) mprotect_page(entry17 + 15, PROT_READ | PROT_WRITE);
+
+    uintptr_t str_va17 = (uintptr_t)vertexpaintblendparams_str;
+    uint32_t  f8b = VERTEXPAINTBLENDPARAMS_FIELD8, f12b = VERTEXPAINTBLENDPARAMS_FIELD12;
+    memcpy(entry17,      &str_va17, 8);
+    memcpy(entry17 + 8,  &f8b,      4);
+    memcpy(entry17 + 12, &f12b,     4);
+
+    mprotect_page(entry17,      PROT_READ);
+    if (p2b != p1b) mprotect_page(entry17 + 15, PROT_READ);
+
+    fprintf(stderr,
+            "[lightmapuv_patch] entry 17 written at offset 0x%lx "
+            "→ \"%s\" (field8=0x%04x field12=0x%04x)\n",
+            (uintptr_t)entry17 - li.base,
+            vertexpaintblendparams_str, VERTEXPAINTBLENDPARAMS_FIELD8, VERTEXPAINTBLENDPARAMS_FIELD12);
+
     /* 3. Patch loop bounds near table references */
     int n = patch_bounds(&li, table_base);
     if (n == 0)
         fprintf(stderr,
-                "[lightmapuv_patch] WARNING: entry written but no loop bounds found — "
-                "lightmapuv will not be reached until bounds are patched manually\n");
+                "[lightmapuv_patch] WARNING: entries written but no loop bounds found — "
+                "lightmapuv/vertexpaintblendparams will not be reached until bounds are patched manually\n");
     else
-        fprintf(stderr, "[lightmapuv_patch] installed — %d loop bound(s) patched\n", n);
+        fprintf(stderr, "[lightmapuv_patch] installed — entries 16+17 written, %d loop bound(s) patched\n", n);
 }
 
 void *dlopen(const char *filename, int flags)

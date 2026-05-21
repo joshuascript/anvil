@@ -133,10 +133,10 @@ else:
     print(f"\nPASS  find_bounds: {len(bounds)} bound(s):")
     for b in bounds:
         val = b['byte']
-        status = "PASS" if val == 0x10 else "FAIL"
-        if val != 0x10: ok = FAIL
-        print(f"        {status}  VMA 0x{b['vma']:x}  file 0x{b['fo']:x}  current=0x{val:02x}"
-              + ("  (would patch → 0x11)" if val == 0x10 else "  (unexpected value)"))
+        status = "PASS" if val in (0x10, 0x12) else "FAIL"
+        if val not in (0x10, 0x12): ok = FAIL
+        note = "(would patch → 0x12)" if val == 0x10 else "(already patched)" if val == 0x12 else "(unexpected value)"
+        print(f"        {status}  VMA 0x{b['vma']:x}  file 0x{b['fo']:x}  current=0x{val:02x}  {note}")
 
 # 5. Final
 print(f"\n{'PASS' if ok else 'FAIL'}  all checks")

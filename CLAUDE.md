@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Also read `anvil/AGENT.md`** — it contains detailed reference documentation for every tool, patch, launch script, and GDB script in this directory.
+
 ## What This Is
 
 Anvil is a patch toolkit that makes s&box run natively on Linux without Proton. It provides:
@@ -47,6 +49,25 @@ Each `.c` file compiles to `patches/bin/<name>.so` and is auto-loaded by every l
 
 All patches use dynamic scanning — no hardcoded offsets remain. Each patch self-locates its target at runtime and prints a mismatch warning to stderr if the binary has changed in a way that breaks the pattern.
 
+#### Writing new patches — staleness strategy
+
+**Always prefer dynamic scanning over hardcoded offsets.** The engine binaries update frequently and offsets shift. Before writing a patch, choose the most stable anchor available:
+
+| What to anchor on | Stability | Use when |
+|-------------------|-----------|----------|
+| Data content (string literals, field values) | Highest | Target is a data structure with known string fields (e.g. lookup tables) |
+| Semantic instruction pattern (meaningful opcode sequence) | High | Target is a specific code path with characteristic surrounding instructions |
+| Raw byte pattern (short opcode sequence) | Medium | No better anchor exists; use the longest unique pattern you can find |
+| Hardcoded offset | Lowest — avoid | Never; always find a pattern instead |
+
+When designing a pattern scan:
+- **Verify uniqueness** — run `pattern_scan.py` on the binary and confirm exactly 1 hit before committing
+- **Anchor on meaning, not encoding** — prefer patterns that reflect the *intent* of the code (e.g. a specific `je`+`mov`+`lea` sequence) over ones that just happen to be unique bytes
+- **Add a sanity check** — verify expected bytes at the target site before writing; print a clear mismatch warning and skip if they don't match
+- **Write a mirrored test script** in `debug/scripts/tests/test_<name>.py` alongside every new patch
+
+For data-anchored patches (like `libsbox_lightmapuv_patch.c`), anchor on source-level string literals that are stable across recompilations, not on addresses or field offsets that can shift.
+
 | Patch | Strategy | Test script |
 |-------|----------|-------------|
 | `libsbox_finalizeload_patch.c` | Pattern scan in `.text` | `test_finalizeload_patch.py` |
@@ -59,9 +80,9 @@ All patches use dynamic scanning — no hardcoded offsets remain. Each patch sel
 Run all test scripts before launching:
 
 ```bash
-python3 anvil/debug/scripts/binaryscan/test_finalizeload_patch.py
-python3 anvil/debug/scripts/binaryscan/test_lightmapuv_patch.py
-python3 anvil/debug/scripts/binaryscan/test_htmlcb_patch.py
+python3 anvil/debug/scripts/tests/test_finalizeload_patch.py
+python3 anvil/debug/scripts/tests/test_lightmapuv_patch.py
+python3 anvil/debug/scripts/tests/test_htmlcb_patch.py
 ```
 
 Each script exits 0 (`PASS  all checks`) if the patch will apply cleanly, or exits 1 with a `FAIL` line describing what broke. A failing script means the corresponding C patch needs its pattern updated before the next launch. Use `pattern_scan.py` and `cross_ref.py` to locate the new pattern context around the affected instruction.

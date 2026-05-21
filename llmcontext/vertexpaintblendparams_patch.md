@@ -1,4 +1,4 @@
-# VertexPaintBlendParams Semantic Patch — IN PROGRESS / UNSOLVED
+# VertexPaintBlendParams Semantic Patch — FIXED (unconfirmed)
 
 ## Problem
 
@@ -113,8 +113,13 @@ offsets. Both patches should write to the same table.
 
 ---
 
-## Files to update when solved
+## Fix applied (2026-05-20)
 
-- `anvil/patches/libsbox_lightmapuv_patch.c` — update offsets, add second entry
-- `anvil/llmcontext/libsbox_lightmapuv_patch.md` — update offset history table
-- This file — mark resolved, fill in verified offsets
+Added to `anvil/patches/libsbox_lightmapuv_patch.c` (v4):
+- Slot 17 written at `table_base + 272` with `"vertexpaintblendparams"`, field8=`0x0005`, field12=`0x0000`
+- Loop bound patched `0x10` → `0x12` (was `0x11` for lightmapuv only)
+
+Field values (`0x0005`/`0x0000`) are the same as `vertexpainttintcolor` — the closest analogue
+in the existing table. May need adjustment if rendering artifacts appear on vertex-painted meshes.
+
+**Awaiting user confirmation** that the `SemanticNameToUsage(): false` assertion no longer appears.

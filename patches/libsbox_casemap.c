@@ -17,8 +17,8 @@
  *      each segment case-insensitively (FirstOrDefault match).
  *   5. On walk failure, add the lowercase path to the neg cache.
  *
- * Build (from game/bin/linuxsteamrt64/):
- *   gcc -shared -fPIC -O2 -o libsbox_casemap.so shims/libsbox_casemap.c -ldl
+ * Build:
+ *   bash anvil/launch/patch_engine.sh   (compiles all patches to patches/bin/)
  */
 
 #define _GNU_SOURCE
