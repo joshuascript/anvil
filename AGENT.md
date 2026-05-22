@@ -211,6 +211,43 @@ command.
 
 ---
 
+### `patches/libsbox_cefvtable_patch.c`
+
+Fixes a SIGSEGV on the main sbox thread when the Sandbox gamemode times out
+waiting for a lobby. The lobby timeout tears down a CEF browser object; a
+concurrent UGC/workshop callback still holds a raw pointer to that object and
+tries to call a virtual method through it. CEF overwrites the vtable pointer
+with the type sentinel `F_CHROME` (`0x454d4f5248435f46`). The engine guards
+against null but not this sentinel, crashing at the double-dereference.
+
+The trampoline adds a sentinel check after the existing null guard, jumping
+to the safe-exit path if the `F_CHROME` value is detected.
+
+Uses a **dynamic pattern scan** in the executable PT_LOAD of `libengine2.so`.
+See `llmcontext/libsbox_cefvtable_patch.md` for the offset history and
+verification command.
+
+---
+
+### `patches/libsbox_hashtable_patch.c`
+
+Fixes a SIGSEGV on a `.NET TP Worker` thread during startup. `PreJITAsync`
+in `Sandbox.ReflectionUtility` pre-JIT-compiles all engine methods on the
+thread pool. When it hits a method that calls into `libengine2.so`, it
+executes a hash table lookup while the main thread is concurrently populating
+the same table. A resize between the capacity-read and the bucket-array-reload
+leaves the computed slot pointer in freed/unmapped memory.
+
+The trampoline adds two bounds checks before the slot dereference: if the
+bucket index exceeds either stored capacity (`[rbx+0x1c]` or `[rbx+0x24]`),
+the lookup exits via the existing empty-bucket path instead of crashing.
+
+Uses a **dynamic pattern scan** in the executable PT_LOAD of `libengine2.so`.
+See `llmcontext/libsbox_hashtable_patch.md` for the offset history and
+verification command.
+
+---
+
 ### `patches/libsbox_casemap.c`
 
 LD_PRELOAD shim that resolves wrong-cased file paths for s&box on Linux.
