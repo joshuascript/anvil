@@ -7,8 +7,9 @@ Exit 0 = all checks pass.
 """
 
 import struct, sys
+from pathlib import Path
 
-BINARY = '/home/joshua/Documents/GitHub/joshuascript/sbox-public/game/bin/linuxsteamrt64/libengine2.so'
+BINARY = str(Path(__file__).resolve().parents[4] / 'game/bin/linuxsteamrt64/libengine2.so')
 PT_LOAD, PF_X, PF_R = 1, 1, 4
 
 PATTERN       = bytes([0x74, 0x03, 0x48, 0x8b, 0x36, 0x4c, 0x8d, 0x2d])
