@@ -23,4 +23,22 @@ if [ -f "$VIDEO_TXT" ]; then
     sed -i 's/\("setting\.nowindowborder"[ \t]*\)"[^"]*"/\1"0"/' "$VIDEO_TXT"
 fi
 
+ENGINE_JSON="$REPO_ROOT/game/config/convar/engine.json"
+if [ -f "$ENGINE_JSON" ]; then
+    echo "WARNING: bloom is currently broken by default on Linux. Disabling r_bloom..."
+    python3 - "$ENGINE_JSON" <<'EOF'
+import json, sys, time
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+key = "convar.r_bloom"
+if key in data:
+    data[key]["Value"] = "False"
+else:
+    data[key] = {"Value": "False", "Timeout": int(time.time()) + 86400 * 30, "DeleteAt": 0}
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+EOF
+fi
+
 echo "Done."
