@@ -11,3 +11,7 @@ Patches in `anvil/patches/` are compiled to `anvil/patches/bin/` and auto-loaded
 **Key offset indicator:** `libengine2.so` modify time — compare against patch `.so` modify time. If engine is newer, offsets may be stale.
 
 Patches that don't catch in GDB (Assert dialogs vs SIGSEGV) require this manual workflow — they don't appear in `debug/logs/` crash sessions.
+
+## Active investigations
+
+- [Particle sprite renderer — ResourceHandleToData invalid handle](llmcontext/particle_texture_handle_invalid.md) — per-frame SeriousWarning from invalid anonymous texture handle in IBatchedParticleSpriteRenderer; native site at librendersystemvulkan.so:0x102199; fix not yet confirmed

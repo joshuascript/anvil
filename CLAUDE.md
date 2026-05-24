@@ -75,7 +75,7 @@ For data-anchored patches (like `libsbox_lightmapuv_patch.c`), anchor on source-
 | `libsbox_htmlcb_patch.c` | Pattern scan in `.text` | `test_htmlcb_patch.py` |
 | `libsbox_casemap.c` | libc syscall interposition | *(no binary offsets — no test needed)* |
 | `libsbox_cefvtable_patch.c` | Pattern scan in `.text` | `test_cefvtable_patch.py` |
-| `libsbox_hashtable_patch.c` | Pattern scan in `.text` | `test_hashtable_patch.py` |
+| `libsbox_openssl_patch.c` | dlopen constructor | *(no binary offsets — no test needed)* |
 
 #### Checking for stale patches after an engine update
 
@@ -86,7 +86,6 @@ python3 anvil/debug/scripts/tests/test_finalizeload_patch.py
 python3 anvil/debug/scripts/tests/test_lightmapuv_patch.py
 python3 anvil/debug/scripts/tests/test_htmlcb_patch.py
 python3 anvil/debug/scripts/tests/test_cefvtable_patch.py
-python3 anvil/debug/scripts/tests/test_hashtable_patch.py
 ```
 
 Each script exits 0 (`PASS  all checks`) if the patch will apply cleanly, or exits 1 with a `FAIL` line describing what broke. A failing script means the corresponding C patch needs its pattern updated before the next launch. Use `pattern_scan.py` and `cross_ref.py` to locate the new pattern context around the affected instruction.

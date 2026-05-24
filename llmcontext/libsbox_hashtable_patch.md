@@ -97,6 +97,7 @@ Confirmed unique (1 hit) in libengine2.so at file offset `0x15bc0a7`.
 | Date       | Pattern addr | Patch site  | Notes   |
 |------------|-------------|-------------|---------|
 | 2026-05-21 | `0x15bc0a7` | `0x15bc0bc` | Initial |
+| 2026-05-21 | `0x15c29a7` | `0x15c29bc` | Engine update |
 
 ## Trigger Identified
 
@@ -124,4 +125,47 @@ exposes any TP Worker that touches a libengine2.so code path to this race.
 
 ## Verification
 
-Not yet confirmed. Awaiting user report that the crash no longer occurs.
+**Patch insufficient — backed up, not active.**
+
+Second session from ligmoidprime (2026-05-22, session `8s7mw8k`) confirmed both
+`.so` patches were loaded. The crash still occurred on a `.NET TP Worker`.
+
+Key differences from original crash:
+- **Crash PC:** `0x7ff7ccbc2013` — inside the mmap'd trampoline (not in
+  libengine2.so directly). The `jmp 0x7ff7d0bc29c4` at PC+4 returns to
+  libengine2.so, confirming the trampoline was reached.
+- **Hash key (r12):** `0x64dc8d0b` — different from the original `0x672244bb`,
+  meaning a different lookup hit the same race.
+- **Faulting instruction:** `mov rbx,[r13]` — same crash instruction, now
+  executing inside the trampoline's `.proceed` path.
+- **r13 at crash:** `0x7ff7200424a8` — unmapped.
+
+The bounds checks (`cmp edx,[rbx+0x1c]` / `cmp edx,[rbx+0x24]`) both passed,
+allowing `.proceed` to execute `lea r13,[rax+rdx*8]` and then crash on
+`mov rbx,[r13]`. The index `edx` was within at least one stored capacity, but
+`rax` (the array pointer) had already been replaced by a resize — so
+`rax + edx*8` pointed past the end of the newly-allocated array.
+
+The bounds check approach guards against out-of-range indices but cannot
+protect against the array pointer itself being stale. The race window between
+the capacity snapshot and the array-pointer reload is narrower than assumed.
+
+**Root cause not addressed.** The correct fix is upstream in managed code:
+`PreJITAsync` must not start until engine initialization (and hash table
+population) is complete. The native bounds check is insufficient.
+
+`patches/libsbox_hashtable_patch.c` renamed to
+`patches/libsbox_hashtable_patch.c.bak` — excluded from compilation.
+
+## Upstream Fix Applied (2026-05-22)
+
+`engine/Sandbox.Reflection/Utility.cs` — `PreJITAsync` now gates on a
+`volatile bool _engineReady`. Assemblies queued before the gate opens are held
+in a `ConcurrentQueue<Assembly>` and drained by `SignalEngineReady()`.
+
+`engine/Sandbox.Engine/Core/Bootstrap.cs` — `ReflectionUtility.SignalEngineReady()`
+called after `IGameInstanceDll.Current.Initialize()` returns, once all engine
+subsystems have finished initialising.
+
+**Confirmed fixed.** User reported all PreJIT errors stopped after the change.
+No native patch required.

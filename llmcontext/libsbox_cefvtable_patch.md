@@ -87,6 +87,7 @@ Confirmed unique (1 hit) in libengine2.so at file offset `0x34df30`.
 | Date       | Pattern addr | Patch site | Notes   |
 |------------|-------------|------------|---------|
 | 2026-05-21 | `0x34df30`  | `0x34df33` | Initial |
+| 2026-05-21 | `0x34df70`  | `0x34df73` | Engine update |
 
 ## Verification
 
