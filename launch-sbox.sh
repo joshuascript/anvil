@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$ANVIL_DIR/.." && pwd)"
 PATCH_BIN="$ANVIL_DIR/patches/bin"
 GAME_BIN="$REPO_ROOT/game/bin/linuxsteamrt64"
 
+LD_PRELOAD="$GAME_BIN/libtier0.so:${LD_PRELOAD}"
 for so in "$PATCH_BIN"/*.so; do
     [ -f "$so" ] || continue
     LD_PRELOAD="$so:${LD_PRELOAD}"
